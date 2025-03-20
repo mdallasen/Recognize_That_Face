@@ -3,70 +3,60 @@ import tensorflow as tf
 import cv2
 import os
 import pandas as pd
+from preprocessor import Preprocessor
 
-# Load trained model
-model = tf.keras.models.load_model("models/attribute_model.h5")
+class Evaluate:
+    def __init__(self, model_path="models/attribute_model.h5", attr_file="list_attr_celeba.csv", results_dir="results/"):
+        """Initialize the model and attribute list."""
+        self.model = tf.keras.models.load_model(model_path) 
+        self.attributes_list = list(pd.read_csv(attr_file).columns[1:])  
 
-# Load attribute names
-attributes_list = list(pd.read_csv("list_attr_celeba.csv").columns[1:])
+        self.results_dir = results_dir
+        os.makedirs(self.results_dir, exist_ok=True)
 
-# Ensure results folder exists
-RESULTS_DIR = "results/"
-os.makedirs(RESULTS_DIR, exist_ok=True)
+        self.preprocessor = Preprocessor()
 
-def preprocess_image(image_path):
-    """Loads an image, resizes it to 160x160, and normalizes pixel values."""
-    image = cv2.imread(image_path)
-    image = cv2.resize(image, (160, 160))
-    image = image.astype("float32") / 255.0  # Normalize pixels (0-1)
-    image = np.expand_dims(image, axis=0)  # Add batch dimension
-    return image
+    def predict_attributes(self, image_path, top_k=5):
+        """Predicts the top K attributes for a given image."""
+        image = self.preprocessor.preprocess_image(image_path)  
 
-def predict_attributes(image_path, model, attributes_list, top_k=5):
-    """Predicts the top K attributes for a given image."""
-    image = preprocess_image(image_path)
+        predictions = tf.nn.sigmoid(self.model.predict(image)[0]).numpy() 
+        top_indices = np.argsort(predictions)[-top_k:][::-1] 
+
+        top_attributes = [(self.attributes_list[i], predictions[i]) for i in top_indices]
+        return top_attributes
     
-    # Run model prediction
-    predictions = model.predict(image)[0]  # Get first image's predictions
+    def draw_predictions(self, image_path, top_attributes, show_image=False):
+        """Draws a bounding box and overlays predicted attributes onto an image."""
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Error loading image: {image_path}")
 
-    # Get top K attributes
-    top_indices = np.argsort(predictions)[-top_k:][::-1]  # Get indices of top 5
-    top_attributes = [(attributes_list[i], predictions[i]) for i in top_indices]
+        start_x, start_y, box_width, box_height = 20, 20, 220, 150
+        cv2.rectangle(image, (start_x, start_y), (start_x + box_width, start_y + box_height), (0, 255, 0), 2)
 
-    return top_attributes
+        y_offset = start_y + 30
+        for attr, prob in top_attributes:
+            text = f"{attr}: {prob:.2f}"
+            cv2.putText(image, text, (start_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 3) 
+            cv2.putText(image, text, (start_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)  
+            y_offset += 25
 
-def draw_predictions(image_path, top_attributes, results_dir=RESULTS_DIR):
-    """Draws a bounding box and overlays predicted attributes onto an image."""
-    image = cv2.imread(image_path)
-    height, width, _ = image.shape
+        image_name = os.path.basename(image_path)
+        output_path = os.path.join(self.results_dir, f"predicted_{image_name}")
+        cv2.imwrite(output_path, image)
+        print(f"Output image saved at {output_path}")
 
-    # Define box position
-    start_x, start_y, box_width, box_height = 20, 20, 220, 150
-    cv2.rectangle(image, (start_x, start_y), (start_x + box_width, start_y + box_height), (0, 255, 0), 2)
+        if show_image:
+            cv2.imshow("Predictions", image)
+            cv2.waitKey(0)
+            cv2.destroyAllWindows()
 
-    # Overlay text
-    y_offset = start_y + 30
-    for attr, prob in top_attributes:
-        text = f"{attr}: {prob:.2f}"
-        cv2.putText(image, text, (start_x + 10, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        y_offset += 25
+    def evaluate_image(self, image_path, top_k=5, show_image=False):
+        """Runs the full evaluation pipeline on a single image."""
+        print(f"Evaluating {image_path}...")
 
-    # Generate output file path
-    image_name = os.path.basename(image_path)
-    output_path = os.path.join(results_dir, f"predicted_{image_name}")
+        top_attributes = self.predict_attributes(image_path, top_k=top_k)
+        self.draw_predictions(image_path, top_attributes, show_image=show_image)
 
-    # Save and display image
-    cv2.imwrite(output_path, image)
-    print(f"✅ Output image saved at {output_path}")
-    cv2.imshow("Predictions", image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
-
-# Run inference and overlay results
-if __name__ == "__main__":
-    image_path = "test_face.jpg"  # Replace with an actual test image
-    if not os.path.exists(image_path):
-        print("❌ Error: Image does not exist.")
-    else:
-        top_attrs = predict_attributes(image_path, model, attributes_list)
-        draw_predictions(image_path, top_attrs)
+        return top_attributes

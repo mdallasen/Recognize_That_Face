@@ -1,61 +1,53 @@
 import pandas as pd
 import os 
 import cv2
+import numpy as np
 
 class Preprocessor:
     def __init__(self):
-        self.img_size = (160, 160)
-        self.attr_file_path = "list_attr_celeba.csv"
-        self.bbox_file_path = "list_bbox_celeba.csv"
-        self.image_folder_path = "img_align_celeba"
-        self.output_path = "preprocessed_faces/"
+        self.img_size = (160, 160) 
+        BASE_DIR = os.path.abspath("data")
+        OUTPUT_DIR = os.path.abspath("dataset/preprocessed_faces")
+
+        self.attr_file_path = os.path.join(BASE_DIR, "list_attr_celeba.csv")
+        self.bbox_file_path = os.path.join(BASE_DIR, "list_bbox_celeba.csv")
+        self.image_folder_path = os.path.join(BASE_DIR, "img_align_celeba/img_align_celeba")
+        self.output_path = OUTPUT_DIR 
 
         os.makedirs(self.output_path, exist_ok=True)
 
     def load(self):
-        """Loads dataset metadata."""
-        self.attributes = pd.read_csv(self.attr_file_path)
-        self.bbox = pd.read_csv(self.bbox_file_path)
-
+        """Loads attribute data."""
+        self.attributes = pd.read_csv(self.attr_file_path, header = 0)
         self.attributes.set_index("image_id", inplace=True)
         self.attributes = self.attributes.replace(-1, 0)
 
-        self.bbox.set_index("image_id", inplace=True)
+    def process_images(self, limit = 1000):
+        """Processes images: resizes to model input size, optionally converts to grayscale."""
+        processed_images = []
+        processed_labels = []
 
-    def crop_and_resize(self, image_path, bbox):
-        """Crops a face using bounding box and resizes to (160,160)."""
-        image = cv2.imread(image_path)
-
-        if image is None:
-            return None 
-        
-        x, y, w, h = bbox
-        face = image[y:y+h, x:x+w]
-        face = cv2.resize(face, self.img_size)
-
-        return face
-
-    def process_images(self):
-        """Processes all images by cropping and resizing."""
-        for img_name, row in tqdm(self.bbox.iterrows(), total=len(self.bbox), desc="Processing Images"):
+        for img_name in self.attributes.index[:limit]:  
+            
             img_path = os.path.join(self.image_folder_path, img_name)
+            image = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+            image = cv2.resize(image, self.img_size)
+            image = np.expand_dims(image, axis = -1)
+            processed_images.append(image)
+            processed_labels.append(self.attributes.loc[img_name].values)
 
-            if not os.path.exists(img_path):
-                print(f"Skipping missing image: {img_name}")
-                continue
+        return np.array(processed_images), np.array(processed_labels)
 
-            bbox = row[['x_1', 'y_1', 'width', 'height']].astype(int).values
-            face = self.crop_and_resize(img_path, bbox)
+    def preprocess_image(self, image_path):
+        """Loads and preprocesses a single image for model inference."""
+        image = cv2.imread(image_path)
+        if image is None:
+            raise ValueError(f"Error loading image: {image_path}")
 
-            if face is not None:
-                cv2.imwrite(os.path.join(self.output_path, img_name), face)
+        image = cv2.resize(image, self.img_size)  
+        image = image.astype("float32") / 255.0  
+        image = np.expand_dims(image, axis=0)  
 
-    def preprocess(self):
-        """Runs all preprocessing steps."""
-        print("Loading dataset...")
-        self.load()
-        print("Processing images...")
-        self.process_images()
-        print("Preprocessing complete!")
-
+        return image
+    
 
