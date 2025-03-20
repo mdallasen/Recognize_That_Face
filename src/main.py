@@ -31,10 +31,13 @@ def main():
         from tensorflow.keras.models import load_model
         import pandas as pd
         
+        # Load model
         model = load_model("models/attribute_model.h5")
         
+        # Load attribute names
         attributes_list = list(pd.read_csv("list_attr_celeba.csv").columns[1:])
         
+        # Run inference
         top_attrs = predict_attributes(args.image, model, attributes_list)
         print(f"🔹 **Top 5 Predicted Attributes for {args.image}:**")
         for attr, prob in top_attrs:

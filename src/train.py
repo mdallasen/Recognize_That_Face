@@ -1,74 +1,86 @@
 import numpy as np
+import tensorflow as tf
 from sklearn.model_selection import train_test_split
-from functions.model import FaceModel
+import os
+import cv2
+import pandas as pd
+from src.model import AttributeModel  # Import the CNN model
 
-class Training: 
-    def __init__(self, data, labels): 
-        self.data = data
-        self.labels = labels
-
-    def generate_triplets(self, data, labels, num_triplets = 200):
+class Training:
+    def __init__(self, image_dir="preprocessed_faces/", attr_file="list_attr_celeba.csv"):
         """
-        Generates (Anchor, Positive, Negative) triplets for training.
+        Initializes the Training class for facial attribute classification.
 
-        :param num_triplets: Number of triplets to generate (default: 1000).
-        :return: Three numpy arrays (anchors, positives, negatives).
+        :param image_dir: Directory containing preprocessed face images.
+        :param attr_file: CSV file with facial attribute labels.
         """
-        
-        unique_labels = np.unique(labels)
-        label_dict = {label: np.where(labels == label)[0] for label in unique_labels}
+        self.image_dir = image_dir
+        self.attr_file = attr_file
+        self.img_size = (160, 160)
+        self.num_attributes = 40  # CelebA has 40 attributes
 
-        total_images = sum(len(indices) for indices in label_dict.values())
+    def load_data(self):
+        """Loads preprocessed images and corresponding attribute labels."""
+        print("📥 Loading images and labels...")
 
-        if num_triplets > total_images:
-            raise ValueError(f"Not enough data to generate {num_triplets} triplets.")
-        
-        anchors, positives, negatives = [], [], []
+        # Load attributes and convert -1 to 0
+        df = pd.read_csv(self.attr_file)
+        df.set_index("image_id", inplace=True)
+        df.replace(-1, 0, inplace=True)  # Convert -1 to 0 (binary classification)
 
-        for _ in range(num_triplets): 
+        # Store image data and labels
+        images = []
+        labels = []
 
-            anchor_label = np.random.choice(unique_labels)
-            anchor_idx = np.random.choice(label_dict[anchor_label])
-            possible_positives = np.setdiff1d(label_dict[anchor_label], anchor_idx)
+        for img_name in df.index:
+            img_path = os.path.join(self.image_dir, img_name)
+            if os.path.exists(img_path):  # Ensure image exists
+                image = cv2.imread(img_path)
+                image = cv2.resize(image, self.img_size)
+                image = image.astype("float32") / 255.0  # Normalize pixel values
 
-            if len(possible_positives) == 0:
-                continue 
-            
-            positive_idx = np.random.choice(possible_positives)
-            negative_label = np.random.choice(unique_labels[unique_labels != anchor_label])
-            negative_idx = np.random.choice(label_dict[negative_label])
+                images.append(image)
+                labels.append(df.loc[img_name].values)
 
-            anchors.append(data[anchor_idx])
-            positives.append(data[positive_idx])
-            negatives.append(data[negative_idx])
-    
-        return np.array(anchors), np.array(positives), np.array(negatives) 
+        print(f"✅ Loaded {len(images)} images and labels.")
+        return np.array(images), np.array(labels)
 
-    def train(self, config):
+    def train(self, batch_size=32, epochs=10, test_size=0.2, model_path="models/attribute_model.h5"):
+        """
+        Trains the AttributeModel using Binary Cross-Entropy Loss.
 
-        model_path = config.get("model_path", "src/models/face_recognition_model.h5")
+        :param batch_size: Number of images per batch.
+        :param epochs: Number of training epochs.
+        :param test_size: Percentage of data used for validation.
+        :param model_path: Path to save the trained model.
+        """
+        print("🚀 Starting training...")
 
-        X_train, X_test, y_train, y_test = train_test_split(self.data, self.labels, 
-            test_size = 0.2, random_state = 42)
+        # Load preprocessed images & labels
+        images, labels = self.load_data()
 
-        anchors_train, positives_train, negatives_train = self.generate_triplets(X_train, y_train)
-        anchors_test, positives_test, negatives_test = self.generate_triplets(X_test, y_test)
-
-        model = FaceModel()
-        triplet_model = model.triplet_network()
-
-        triplet_model.compile(optimizer='adam', loss = model.triplet_loss)
-
-        triplet_model.fit(
-            [anchors_train, positives_train, negatives_train],
-            np.zeros((anchors_train.shape[0], 1)), 
-            epochs=10, 
-            batch_size=32, 
-            validation_data=(
-                [anchors_test, positives_test, negatives_test], 
-                np.zeros((anchors_test.shape[0], 1))
-            )
+        # Split into train and validation sets
+        X_train, X_test, y_train, y_test = train_test_split(
+            images, labels, test_size=test_size, stratify=labels, random_state=42
         )
 
-        triplet_model.save(model_path)
-        print(f"Model saved successfully at: {model_path}")
+        # Initialize & Compile Model
+        model = AttributeModel().model
+        model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+
+        # Train the Model
+        model.fit(
+            X_train, y_train,
+            validation_data=(X_test, y_test),
+            batch_size=batch_size,
+            epochs=epochs
+        )
+
+        # Save Model
+        model.save(model_path)
+        print(f"✅ Model training complete. Saved at: {model_path}")
+
+# Run Training
+if __name__ == "__main__":
+    trainer = Training()
+    trainer.train(batch_size=32, epochs=10)
